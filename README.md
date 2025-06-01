@@ -9,5 +9,7 @@ You do not have to provide an explicit list of file types or create the sub dire
 
 
 **How to use the app:**
+
+Plop the FileSorter.py app in the directory you'd like sorted, and in a terminal run `python FileSorter.py`
 - You can plop the app in any directory and it will sort out everything in there
 - If you wish to have multiple directories sorted at the same time, you can create a "FileSorter.config" file in the same directory as the app, where the config file lists each desired directory on an individual line
