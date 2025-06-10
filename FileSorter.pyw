@@ -180,63 +180,71 @@ class Sort(ttk.Frame):
 
     # This is the sorting algorithm
     def sort_by_filetype(self):
-        if (not dirList):
-            log.append("WARNING:\tNo directories present when user tried to sort.")
-            messagebox.showwarning("Warning", "You haven't selected any folders to sort.")
-        else:
-            for directoryText in dirList:
-                directory = os.fsencode(directoryText)
-                # Throw warning if directory wasn't found
-                if (not os.path.isdir(directory)):
-                    log.append("WARNING:\tDirectory '"+directoryText+"' was not found.")
-                    continue
-                
-                folders = {}
-                
-                for file in os.listdir(directory):
-                    filename = os.fsdecode(file)
-                    # Skip over the config file
-                    if (filename == "FileSorter.config" or filename == "FileSorter.py"):
+        try:
+            if (not dirList):
+                log.append("WARNING:\tNo directories present when user tried to sort.")
+                messagebox.showwarning("Warning", "You haven't selected any folders to sort.")
+            else:
+                for directoryText in dirList:
+                    directory = os.fsencode(directoryText)
+                    # Throw warning if directory wasn't found
+                    if (not os.path.isdir(directory)):
+                        log.append("WARNING:\tDirectory '"+directoryText+"' was not found.")
                         continue
+                    
+                    folders = {}
+                    
+                    for file in os.listdir(directory):
+                        filename = os.fsdecode(file)
+                        # Skip over the config file
+                        if (filename == "FileSorter.config" or filename == "FileSorter.py"):
+                            continue
 
-                    filenameSplit = filename.split(".")
+                        filenameSplit = filename.split(".")
 
-                    # We know this is a file
-                    if (len(filenameSplit) > 1):    
-                        extension = filenameSplit[-1]
-                        log.append("INFO:\tFile '"+filename+"' is of type: "+extension)
+                        # We know this is a file
+                        if (os.path.isfile(directoryText+"/"+filename)):  
+                            if (len(filenameSplit) > 1):
+                                extension = filenameSplit[-1]
+                            else:
+                                extension = "file"
+                            log.append("INFO:\tFile '"+filename+"' is of type: "+extension)
 
-                        # Make sub-directory if it doesn't already exist
-                        if (extension.lower() not in folders):
-                            folders[extension.lower()] = True
-                            try:
-                                os.mkdir(directoryText+'/'+extension.lower())
-                                log.append("INFO:\tCreated folder: "+directoryText+'/'+extension.lower())
-                            except FileExistsError:
+                            # Make sub-directory if it doesn't already exist
+                            if (extension.lower() not in folders):
                                 folders[extension.lower()] = True
-                                log.append("INFO:\tFolder aready exists: "+directoryText+'/'+extension.lower())
+                                try:
+                                    os.mkdir(directoryText+'/'+extension.lower())
+                                    log.append("INFO:\tCreated folder: "+directoryText+'/'+extension.lower())
+                                except FileExistsError:
+                                    folders[extension.lower()] = True
+                                    log.append("INFO:\tFolder aready exists: "+directoryText+'/'+extension.lower())
+                                except Exception as e:
+                                    log.append(e)
+
+                            # Move file to its respective sub-directory
+                            try:
+                                shutil.move(directoryText+'/'+filename, directoryText+'/'+extension.lower()+'/'+filename)
+                                log.append("Successfully moved "+directoryText+'/'+filename+" to "+directoryText+'/'+extension.lower()+'/'+filename)
+                            except PermissionError:
+                                log.append("ERROR:\tFile '"+filename+"' failed to be moved due to a lack of permissions. Make sure this file isn't open in another program!")
+                                log.append(e)
                             except Exception as e:
+                                log.append("ERROR:\tFile '"+filename+"' failed to be moved: ")
                                 log.append(e)
 
-                        # Move file to its respective sub-directory
-                        try:
-                            shutil.move(directoryText+'/'+filename, directoryText+'/'+extension.lower()+'/'+filename)
-                            log.append("Successfully moved "+directoryText+'/'+filename+" to "+directoryText+'/'+extension.lower()+'/'+filename)
-                        except PermissionError:
-                            log.append("ERROR:\tFile '"+filename+"' failed to be moved due to a lack of permissions. Make sure this file isn't open in another program!")
-                            log.append(e)
-                        except Exception as e:
-                            log.append("ERROR:\tFile '"+filename+"' failed to be moved: ")
-                            log.append(e)
-
-                    # We know this is a folder
-                    else:
-                        log.append("INFO:\tFound existing folder: "+filename)
-                        if (filename.lower() not in folders):
-                            folders[filename.lower()] = True
-            messagebox.showinfo("Complete", "Your folders have been sorted.\nPlease check the logs if any files have not been moved.")
+                        # We know this is a folder
+                        else:
+                            log.append("INFO:\tFound existing folder: "+filename)
+                            if (filename.lower() not in folders):
+                                folders[filename.lower()] = True
+                messagebox.showinfo("Complete", "Your folders have been sorted.\nPlease check the logs if any files have not been moved.")
+        
+        except Exception as e:
+            log.append("ERROR:\tAn unexpected error occured in the sorting algorithm:")
+            log.append(e)
+            messagebox.showerror("Error occured", "An unexpected error occured.\nPlease go into the 'Console output' tab and save the log.\nContact: tmironovici@gmail.com")
 ######################### End of Sort tab logic #########################
         
-
 app = Application()
 app.mainloop()
