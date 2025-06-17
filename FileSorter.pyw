@@ -5,11 +5,21 @@ from tkinter import ttk
 from tkinter import filedialog
 from tkinter import messagebox
 
+# import necessary libraries
+try:
+    import mymodule
+except ImportError as e:
+    pass 
+
+
 # Global vars
 dirList = []
 log = []
 includeSubfolders = False
+enableRootDir = False
+rootDirectory = ""
 ruleCount = 0
+ruleID = 0
 rules = {}
 
 class Application(tk.Tk):
@@ -197,12 +207,13 @@ class Sort(ttk.Frame):
                         log.append("WARNING:\tDirectory '"+directoryText+"' was not found.")
                         continue
                     
+                    #keep track of folders we know exist along the way to prevent repeat create dir requests
                     folders = {}
                     
                     for file in os.listdir(directory):
                         filename = os.fsdecode(file)
-                        # Skip over the config file
-                        if (filename == "FileSorter.config" or filename == "FileSorter.py"):
+                        # Skip over the script
+                        if (filename == "FileSorter.pyw"):
                             continue
 
                         filenameSplit = filename.split(".")
@@ -215,22 +226,45 @@ class Sort(ttk.Frame):
                                 extension = "file"
                             log.append("INFO:\tFile '"+filename+"' is of type: "+extension)
 
-                            # we have a dictionary of rules: {All: [[word1,dir1], [word2,dir2]], .pdf: [[word3,dir3], [word4,dir4]]}
+                            ruleMatched = False
+
+                            # we have a dictionary of rules: {All: [[word1,dir1,id1], [word2,dir2, id2]], .pdf: [[word3,dir3,id3], [word4,dir4,id4]]}
                             # prioritize all files types, then All
                             supportedExtensions = ['.pdf', '.txt', '.docx']
+                            
                             if (('.'+extension) in supportedExtensions):
-                                for supportedExtension in supportedExtensions:
-                                    if (('.'+extension) in rules):
-                                        log.append("INFO:")
-                                        #if the value of key=extension is in the file's content, move to the given dir
-                            else:
-                                log.append("INFO:")
-                                #look at the "all" ruleset
+                                # if the filetype is supported and there are rules for it
+                                if (('.'+extension) in rules):
+                                    currRuleset = rules.get('.'+extension)
+                                    allRuleset = rules.get('All')
+                                    currRuleset += allRuleset
+                                    
+                                    for rule in currRuleset:
+                                        # check if any of the filetype keywords are present, and if so move them into that special directory
+                                        fileToText = "" #TODO
+                                        if (rule[0] in fileToText):
+                                            ruleMatched = True
+                                            log.append("INFO:\t Found '"+rule[0]+"' in "+filename)
+                                            
+                                            make_dir(rule[1], folders)
+                                            move_file(directoryText+'/'+filename, rule[1], filename)
+            
+                                # Checks for just the 'All' in case filetype isn't specified
+                                else:
+                                    currRuleset = rules.get('All')
+                                    for rule in currRuleset:
+                                        # check if any of the filetype keywords are present, and if so move them into that special directory
+                                        fileToText = "" #TODO
+                                        if (rule[0] in fileToText):
+                                            ruleMatched = True
+                                            log.append("INFO:\t Found '"+rule[0]+"' in "+filename)
+                                    log.append("INFO:")
+                                    #look at the "all" ruleset
 
-
-                            make_dir(extension.lower(), folders, directoryText, extension.lower())
-
-                            move_file(directoryText+'/'+filename, directoryText+'/'+extension.lower()+'/'+filename, filename)
+                            # default interaction if the filetype is unsupported or does not match any rules
+                            if (not ruleMatched):
+                                make_dir(directoryText+'/'+extension.lower(), folders)
+                                move_file(directoryText+'/'+filename, directoryText+'/'+extension.lower()+'/'+filename, filename)
 
                         # We know this is a folder
                         else:
@@ -244,16 +278,15 @@ class Sort(ttk.Frame):
             log.append(e)
             messagebox.showerror("Error occured", "An unexpected error occured.\nPlease go into the 'Console output' tab and save the log.\nContact: tmironovici@gmail.com")
 
-        def make_dir(dir, folders, directoryText, extension):
+        def make_dir(dir, folders):
             # Make sub-directory if it doesn't already exist
             if (dir not in folders):
-                folders[extension] = True
+                folders[dir] = True
                 try:
-                    os.mkdir(directoryText+'/'+extension)
-                    log.append("INFO:\tCreated folder: "+directoryText+'/'+extension)
+                    os.mkdir(dir)
+                    log.append("INFO:\tCreated folder: "+dir)
                 except FileExistsError:
-                    folders[extension] = True
-                    log.append("INFO:\tFolder aready exists: "+directoryText+'/'+extension)
+                    log.append("INFO:\tFolder aready exists: "+dir)
                 except Exception as e:
                     log.append(e)
 
@@ -292,20 +325,30 @@ class OptionsContent(ttk.Frame):
         self.columnconfigure(3, weight=1)
         
         self.subDirsBool = tk.BooleanVar()
+        self.rootDirBool = tk.BooleanVar()
         
-        self.subDirs = ttk.Checkbutton(self, text="Automatically include all sub-folders", command=self.checkbox_changed, variable=self.subdri, onvalue=True, offvalue=False)
-        self.subDirs.grid(row=0, column=0)
+        self.subDirs = ttk.Checkbutton(self, text="Automatically include all sub-folders", command=self.sub_dirs, variable=self.subDirsBool, onvalue=True, offvalue=False)
+        self.subDirs.grid(row=0, column=0, sticky='w')
+
+        self.rootDir = ttk.Checkbutton(self, text="Put all my sorted files under this parent folder:", command=self.root_dir, variable=self.rootDirBool, onvalue=True, offvalue=False)
+        self.rootDir.grid(row=1, column=0, sticky='w', pady=(15,0))
+
+        self.rootDirLabel = ttk.Label(self, text="No folder selected")
+        self.rootDirLabel.grid(row=2, column=0, sticky='w')
+
+        self.rootDirLocation = ttk.Button(self, text="Change folder", command=self.update_root_dir)
+        self.rootDirLocation.grid(row=2, column=1, sticky='w')
 
         self.exportRules = ttk.Button(self, text="Export ruleset", command=self.export_rules)
-        self.exportRules.grid(row=1, column=0, sticky='w', pady=15)
+        self.exportRules.grid(row=3, column=0, sticky='w', pady=15)
 
         self.importRules = ttk.Button(self, text="Import ruleset", command=self.import_rules)
-        self.importRules.grid(row=1, column=3, sticky='e', pady=15)
+        self.importRules.grid(row=3, column=3, sticky='e', pady=15)
 
         self.table = Table(self)
-        self.table.grid(row=2, column=0, columnspan=4)
+        self.table.grid(row=4, column=0, columnspan=4)
 
-    def checkbox_changed(self):
+    def sub_dirs(self):
         global includeSubfolders
         if self.subDirsBool.get():
             includeSubfolders = True
@@ -313,6 +356,24 @@ class OptionsContent(ttk.Frame):
         else:
             includeSubfolders = False
             log.append("INFO:\tDisabled auto adding sub-directories")
+
+    def root_dir(self):
+        global enableRootDir
+        if self.rootDirBool.get():
+            enableRootDir = True
+            log.append("INFO:\tEnabled root folder")
+        else:
+            enableRootDir = False
+            log.append("INFO:\tDisabled root folder")
+
+    def update_root_dir(self):
+        global rootDirectory
+        folderPath = filedialog.askdirectory()
+
+        if folderPath:
+            self.rootDirLabel.config(text=folderPath)
+            rootDirectory = folderPath
+
     #TODO
     def export_rules(self):
         files = [('Excel', '*.xlsx')]
@@ -374,15 +435,12 @@ class Table(ttk.Frame):
         super().__init__(parent)
 
         # Creating the table
-        self.rulesTable = ttk.Treeview(self, selectmode="extended")
+        self.rulesTable = ttk.Treeview(self, selectmode="extended", columns=("In this file type", "if the following text appears", "put the file in this folder"), show="headings")
         self.rulesTable.grid(row=0, column=0, sticky="nesw")
 
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.rulesTable.yview)
         self.scrollbar.grid(row=0, column=1, sticky="ns")
         self.rulesTable.configure(yscrollcommand=self.scrollbar.set)
-
-        # Format columns & headings
-        self.rulesTable['columns'] = ("In this file type", "if the following text appears", "put the file in this folder")
 
         self.rulesTable.column("#0", width=0, stretch=False)
         self.rulesTable.column("In this file type", anchor='w', width=100)
@@ -402,10 +460,16 @@ class Table(ttk.Frame):
         self.extensionLabel = ttk.Label(self.inputFrame, text="File type")
         self.extensionLabel.grid(row=0, column=0, pady=(15,5), padx=5)
 
-        self.keywordLabel = ttk.Label(self.inputFrame, text="Text")
+        self.separator1 = ttk.Separator(self.inputFrame, orient='vertical')
+        self.separator1.grid(row=0, column=1, rowspan=2, sticky='ns', pady=(20,0))
+
+        self.keywordLabel = ttk.Label(self.inputFrame, text="Text match")
         self.keywordLabel.grid(row=0, column=2, pady=(15,5), padx=5)
 
-        self.desiredDirectoryLabel = ttk.Label(self.inputFrame, text="Folder")
+        self.separator2 = ttk.Separator(self.inputFrame, orient='vertical')
+        self.separator2.grid(row=0, column=3, rowspan=2, sticky='ns', pady=(20,0))
+
+        self.desiredDirectoryLabel = ttk.Label(self.inputFrame, text="Destination folder")
         self.desiredDirectoryLabel.grid(row=0, column=4, columnspan=2, pady=(15,5), padx=5)
 
         self.extensionString = tk.StringVar(self)
@@ -430,7 +494,7 @@ class Table(ttk.Frame):
         self.updateButton = ttk.Button(self.buttonFrame, text="Update selected rule", command=self.update)
         self.updateButton.grid(row=0, column=0, pady=10, padx=0)
 
-        self.addNewButton = ttk.Button(self.buttonFrame, text="Add rule", command=self.add)
+        self.addNewButton = ttk.Button(self.buttonFrame, text="➕ Add rule", command=self.add)
         self.addNewButton.grid(row=0, column=1, pady=10, padx=0)
 
         self.removeSelectedButton = ttk.Button(self.buttonFrame, text="Remove selected rules", command=self.remove_selected)
@@ -470,41 +534,98 @@ class Table(ttk.Frame):
         folderPath = filedialog.askdirectory()
 
         if folderPath:
-            if (folderPath not in dirList):
-                self.desiredDirectoryInput.insert(tk.END, folderPath)
-        else:
-            log.append("INFO:\tNo folder selected.")
+            
+            self.desiredDirectoryInput.delete(0, tk.END)
+            self.desiredDirectoryInput.insert(tk.END, folderPath)
 
     def add(self):
-        self.rulesTable.tag_configure('white', background="white")
-        global ruleCount
+        if (not os.path.isdir(self.desiredDirectoryInput.get())):
+            if (not self.keywordInput.get()):
+                messagebox.showwarning("Warning", "You have not specified a text match\n and the destination folder is invalid.")
+            else: 
+                messagebox.showwarning("Warning", "Destination folder is invalid.")
+        elif (not self.keywordInput.get()):
+            messagebox.showwarning("Warning", "You have not specified a text match")
         
-        self.rulesTable.insert(parent='', index='end', iid=ruleCount, text="", values=(self.extensionString.get(), self.keywordInput.get(), self.desiredDirectoryInput.get()), tags=('white'))
+        else:
+            self.rulesTable.tag_configure('white', background="white")
+            global ruleCount
+            global ruleID
+            
+            # adds to dictionary
+            if (self.extensionString.get() not in rules):
+                rules[self.extensionString.get()] = [[self.keywordInput.get(), self.desiredDirectoryInput.get(), ruleID]]
+            else:
+                temp = rules.get(self.extensionString.get())
+                temp.append([self.keywordInput.get(), self.desiredDirectoryInput.get(), ruleID])
+                rules[self.extensionString.get()] = temp
+            
+            self.rulesTable.insert(parent='', index='end', iid=ruleCount, text=ruleID, values=(self.extensionString.get(), self.keywordInput.get(), self.desiredDirectoryInput.get()), tags=('white'))
 
-        ruleCount += 1
+            ruleCount += 1
+            ruleID += 1
 
-        # Clear the boxes
-        self.extensionString.set("All")
-        self.keywordInput.delete(0, tk.END)
-        self.desiredDirectoryInput.delete(0, tk.END)
+            # Clear the boxes
+            self.extensionString.set("All")
+            self.keywordInput.delete(0, tk.END)
+            self.desiredDirectoryInput.delete(0, tk.END)
 
     def remove_selected(self):
-        x = self.rulesTable.selection()
-        for record in x:
-            self.rulesTable.delete(record)
+        global ruleCount
+        global rules
+
+        if (ruleCount > 0):
+            selection = self.rulesTable.selection()
+
+            for record in selection:
+                prevRule = self.rulesTable.item(record)
+                ruleset = rules[prevRule['values'][0]]
+                id = prevRule['text']
+
+                # removes from dictionary
+                for i in range(len(ruleset)):
+                    if (ruleset[i][2] == id):
+                        ruleset.pop(i)
+                        break
+                
+                # and from treeview
+                self.rulesTable.delete(record)
+                ruleCount -= 1
 
     def update(self):
         # Grab record number
         selected = self.rulesTable.focus()
-        # Save new data
-        self.rulesTable.item(selected, text="", values=(self.extensionString.get(), self.keywordInput.get(), self.desiredDirectoryInput.get()))
+        
+        if (not os.path.isdir(self.desiredDirectoryInput.get())):
+            if (not self.keywordInput.get()):
+                messagebox.showwarning("Warning", "You have not specified a text match\n and the destination folder is invalid.")
+            else:
+                messagebox.showwarning("Warning", "Destination folder is invalid.")
+        elif (not self.keywordInput.get()):
+            messagebox.showwarning("Warning", "You have not specified a text match")
+        
+        else:
+            global rules
+            global ruleCount
 
-        # Clear entry boxes
-        self.extensionString.set("All")
-        self.keywordInput.delete(0, tk.END)
-        self.desiredDirectoryInput.delete(0, tk.END)
+            if (ruleCount > 0):
+                prevRule = self.rulesTable.item(selected)
+                ruleset = rules[prevRule['values'][0]]
+                id = prevRule['text']
 
-    
+                # updates dictionary
+                for i in range(len(ruleset)):
+                    if (ruleset[i][2] == id):
+                        rule = [self.keywordInput.get(), self.desiredDirectoryInput.get(), id]
+                        ruleset[i] = rule
+
+                # and treeview
+                self.rulesTable.item(selected, text=id, values=(self.extensionString.get(), self.keywordInput.get(), self.desiredDirectoryInput.get()))
+
+                # Clear entry boxes
+                self.extensionString.set("All")
+                self.keywordInput.delete(0, tk.END)
+                self.desiredDirectoryInput.delete(0, tk.END)
 ######################### End of Options tab logic #########################
         
 app = Application()
