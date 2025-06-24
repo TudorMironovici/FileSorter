@@ -1,26 +1,31 @@
 import os
+import io
+import sys
 import shutil
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
 from tkinter import messagebox
 
-# import necessary libraries
-try:
-    import mymodule
-except ImportError as e:
-    pass 
+# Need to install these (in requirements.txt)
+import pandas as pd
+from docx import Document
+import fitz
+import easyocr
 
 
 # Global vars
 dirList = []
 log = []
+enablePDFimg2txt = False
 includeSubfolders = False
 enableRootDir = False
 rootDirectory = ""
 ruleCount = 0
 ruleID = 0
 rules = {}
+supportedExtensions = ['.pdf', '.txt', '.docx', '.xlsx']
+
 
 class Application(tk.Tk):
     def __init__(self):
@@ -104,7 +109,7 @@ class ConsoleContent(ttk.Frame):
         self.scrollbar = ttk.Scrollbar(self, orient=tk.VERTICAL)
         self.scrollbar.grid(row=1, column=1, sticky='ns')
 
-        self.logOutput = tk.Listbox(self, yscrollcommand=self.scrollbar.set)
+        self.logOutput = tk.Listbox(self, height=40, yscrollcommand=self.scrollbar.set)
         self.logOutput.grid(row=1, column=0, sticky='nsew')
 
         self.scrollbar.config(command=self.logOutput.yview)
@@ -179,10 +184,18 @@ class SortContent(ttk.Frame):
         folderPath = filedialog.askdirectory()
 
         if folderPath:
-            if (folderPath not in dirList):
-                log.append("INFO:\tSelected folder: "+folderPath)
-                self.directoryList.insert(tk.END, folderPath)
-                dirList.append(folderPath)
+            global includeSubfolders
+            paths = [folderPath]
+            if (includeSubfolders):
+                for root, dirs, files in os.walk(folderPath):
+                    for directory in dirs:
+                        paths.append(os.path.join(root, directory))
+                log.append('INFO:\tIncluding the following directories based on setting "Automatically include all sub-folders" being enabled: '+str(paths))
+            for path in paths:
+                if (path not in dirList):
+                    log.append("INFO:\tSelected folder: "+path)
+                    self.directoryList.insert(tk.END, path)
+                    dirList.append(path)
         else:
             log.append("INFO:\tNo folder selected.")
 
@@ -227,44 +240,57 @@ class Sort(ttk.Frame):
                             log.append("INFO:\tFile '"+filename+"' is of type: "+extension)
 
                             ruleMatched = False
+                            global supportedExtensions 
 
                             # we have a dictionary of rules: {All: [[word1,dir1,id1], [word2,dir2, id2]], .pdf: [[word3,dir3,id3], [word4,dir4,id4]]}
                             # prioritize all files types, then All
-                            supportedExtensions = ['.pdf', '.txt', '.docx']
                             
+                            fileToText = ""
                             if (('.'+extension) in supportedExtensions):
                                 # if the filetype is supported and there are rules for it
                                 if (('.'+extension) in rules):
                                     currRuleset = rules.get('.'+extension)
-                                    allRuleset = rules.get('All')
-                                    currRuleset += allRuleset
+                                    if ('All' in rules):
+                                        allRuleset = rules.get('All')
+                                        currRuleset += allRuleset
                                     
                                     for rule in currRuleset:
                                         # check if any of the filetype keywords are present, and if so move them into that special directory
-                                        fileToText = "" #TODO
-                                        if (rule[0] in fileToText):
+                                        fileToText = self.convertFileToString(directoryText+'/'+filename)
+                                        if (rule[0].lower() in fileToText):
                                             ruleMatched = True
                                             log.append("INFO:\t Found '"+rule[0]+"' in "+filename)
                                             
-                                            make_dir(rule[1], folders)
-                                            move_file(directoryText+'/'+filename, rule[1], filename)
+                                            self.make_dir(rule[1], folders)
+                                            self.move_file((directoryText+'/'+filename), rule[1], filename)
+                                            break
             
                                 # Checks for just the 'All' in case filetype isn't specified
-                                else:
+                                elif ('All' in rules and not ruleMatched):
                                     currRuleset = rules.get('All')
                                     for rule in currRuleset:
-                                        # check if any of the filetype keywords are present, and if so move them into that special directory
-                                        fileToText = "" #TODO
-                                        if (rule[0] in fileToText):
+                                        # turning the file to string can be pretty computationally expensive. Want to avoid doing it unnecessarily
+                                        if (fileToText == ""):
+                                            fileToText = self.convertFileToString(directoryText+'/'+filename)
+                                        if (rule[0].lower() in fileToText):
                                             ruleMatched = True
                                             log.append("INFO:\t Found '"+rule[0]+"' in "+filename)
-                                    log.append("INFO:")
-                                    #look at the "all" ruleset
+
+                                            self.make_dir(rule[1], folders)
+                                            self.move_file((directoryText+'/'+filename), rule[1], filename)
+                                            break
 
                             # default interaction if the filetype is unsupported or does not match any rules
                             if (not ruleMatched):
-                                make_dir(directoryText+'/'+extension.lower(), folders)
-                                move_file(directoryText+'/'+filename, directoryText+'/'+extension.lower()+'/'+filename, filename)
+                                global enableRootDir
+                                global rootDirectory
+                                newDir = directoryText+'/'+extension.lower()
+
+                                if (enableRootDir and rootDirectory != ""):
+                                    newDir = rootDirectory
+
+                                self.make_dir(newDir, folders)
+                                self.move_file(directoryText+'/'+filename, newDir+'/'+filename, filename)
 
                         # We know this is a folder
                         else:
@@ -278,29 +304,94 @@ class Sort(ttk.Frame):
             log.append(e)
             messagebox.showerror("Error occured", "An unexpected error occured.\nPlease go into the 'Console output' tab and save the log.\nContact: tmironovici@gmail.com")
 
-        def make_dir(dir, folders):
-            # Make sub-directory if it doesn't already exist
-            if (dir not in folders):
-                folders[dir] = True
-                try:
-                    os.mkdir(dir)
-                    log.append("INFO:\tCreated folder: "+dir)
-                except FileExistsError:
-                    log.append("INFO:\tFolder aready exists: "+dir)
-                except Exception as e:
-                    log.append(e)
-
-        def move_file(curr, new, filename):
-            # Move file to its respective sub-directory
+    def make_dir(self, dir, folders):
+        # Make sub-directory if it doesn't already exist
+        if (dir not in folders):
+            folders[dir] = True
             try:
-                shutil.move(curr, new)
-                log.append("Successfully moved "+curr+" to "+new)
-            except PermissionError:
-                log.append("ERROR:\tFile '"+filename+"' failed to be moved due to a lack of permissions. Make sure this file isn't open in another program!")
-                log.append(e)
+                os.mkdir(dir)
+                log.append("INFO:\tCreated folder: "+dir)
+            except FileExistsError:
+                log.append("INFO:\tFolder aready exists: "+dir)
             except Exception as e:
-                log.append("ERROR:\tFile '"+filename+"' failed to be moved: ")
                 log.append(e)
+
+    def move_file(self, curr, new, filename):
+        # Move file to its respective sub-directory
+        try:
+            shutil.move(curr, new)
+            log.append("Successfully moved "+curr+" to "+new)
+        except PermissionError:
+            log.append("ERROR:\tFile '"+filename+"' failed to be moved due to a lack of permissions. Make sure this file isn't open in another program!")
+            log.append(e)
+        except Exception as e:
+            log.append("ERROR:\tFile '"+filename+"' failed to be moved: ")
+            log.append(e)
+    
+    def convertFileToString(self, file):
+        log.append("INFO:\tGrabbing text out of "+file)
+        filename = os.fsdecode(file)
+        filenameSplit = filename.split(".")
+        extension = ""
+        contents = ""
+
+        if (len(filenameSplit) > 1):
+            extension = filenameSplit[-1]
+        else:
+            extension = "file"
+        
+        try:
+            match extension.lower():
+                case "pdf":
+                    global enablePDFimg2txt
+                    doc = fitz.open(file)
+                    mat = fitz.Matrix(4,4)
+
+                    for pageNum in range(doc.page_count):
+                        page = doc.load_page(pageNum)
+
+                        # Get the plain text ONLY
+                        contents += page.get_text()
+                        
+                        if (enablePDFimg2txt):
+                            # Then we make the whole page into an image and prepare it for OCR. 
+                            # Since we only care is the text is present, it's ok to duplicate contents by adding plain text first.
+                            # Especially since OCR is never going to be perfect, whereas scraping the text off the pdf
+                            pix = page.get_pixmap(matrix = mat)
+                            img_bytes = pix.tobytes("png") 
+                            reader = easyocr.Reader(['en'])
+                            result = reader.readtext(img_bytes, detail=0)
+
+                            for chunk in result:
+                                contents += chunk
+
+                    return contents.lower()
+                
+                case "txt":
+                    with open(file, "r") as file:
+                        contents = file.read()
+                    return contents.lower()
+                
+                case "docx":
+                    doc = Document(file)
+                    for paragraph in doc.paragraphs:
+                        contents += paragraph.text
+                    return contents.lower()
+                
+                case "xlsx":
+                    df = pd.read_excel(file)
+                    contents = df.to_string()
+                    return contents.lower()
+        except fitz.EmptyFileError:
+            log.append("WARNING:\tFile has been detected as empty. Skipping over it.")
+        except Exception as e:
+            log.append("ERROR:\tAn error occured when trying to read file:")
+            log.append(e)
+            raise e
+
+        # In case of mistaken identity
+        return contents
+
 ######################### End of Sort tab logic #########################
 
 # This OptionsTab obj generates the Sort tab by calling all necessary components
@@ -323,30 +414,37 @@ class OptionsContent(ttk.Frame):
         super().__init__(parent)
 
         self.columnconfigure(3, weight=1)
-        
+
+        self.img2txtBool = tk.BooleanVar()
         self.subDirsBool = tk.BooleanVar()
         self.rootDirBool = tk.BooleanVar()
+
+        self.img2txt = ttk.Checkbutton(self, text="Automatically convert scanned PDFs to text\n(not recommended - this process is extremely computationally taxing!)", command=self.img_to_text, variable=self.img2txtBool, onvalue=True, offvalue=False)
+        self.img2txt.grid(row=0, column=0, sticky='w')
         
         self.subDirs = ttk.Checkbutton(self, text="Automatically include all sub-folders", command=self.sub_dirs, variable=self.subDirsBool, onvalue=True, offvalue=False)
-        self.subDirs.grid(row=0, column=0, sticky='w')
+        self.subDirs.grid(row=1, column=0, sticky='w', pady=(15,0))
 
         self.rootDir = ttk.Checkbutton(self, text="Put all my sorted files under this parent folder:", command=self.root_dir, variable=self.rootDirBool, onvalue=True, offvalue=False)
-        self.rootDir.grid(row=1, column=0, sticky='w', pady=(15,0))
+        self.rootDir.grid(row=2, column=0, sticky='w', pady=(15,0))
 
         self.rootDirLabel = ttk.Label(self, text="No folder selected")
-        self.rootDirLabel.grid(row=2, column=0, sticky='w')
+        self.rootDirLabel.grid(row=3, column=0, sticky='w')
 
         self.rootDirLocation = ttk.Button(self, text="Change folder", command=self.update_root_dir)
-        self.rootDirLocation.grid(row=2, column=1, sticky='w')
-
-        self.exportRules = ttk.Button(self, text="Export ruleset", command=self.export_rules)
-        self.exportRules.grid(row=3, column=0, sticky='w', pady=15)
-
-        self.importRules = ttk.Button(self, text="Import ruleset", command=self.import_rules)
-        self.importRules.grid(row=3, column=3, sticky='e', pady=15)
+        self.rootDirLocation.grid(row=3, column=1, sticky='w')
 
         self.table = Table(self)
         self.table.grid(row=4, column=0, columnspan=4)
+
+    def img_to_text(self):
+        global enablePDFimg2txt
+        if self.img2txtBool.get():
+            enablePDFimg2txt = True
+            log.append("INFO:\tEnabled auto converting scanned PDFs to text")
+        else:
+            enablePDFimg2txt = False
+            log.append("INFO:\tDisabled auto converting scanned PDFs to text")
 
     def sub_dirs(self):
         global includeSubfolders
@@ -373,73 +471,28 @@ class OptionsContent(ttk.Frame):
         if folderPath:
             self.rootDirLabel.config(text=folderPath)
             rootDirectory = folderPath
-
-    #TODO
-    def export_rules(self):
-        files = [('Excel', '*.xlsx')]
-        file = filedialog.asksaveasfile(filetypes=files, defaultextension=files)
-        # if file:
-        #     try:
-        #         for msg in log:
-        #             file.write(msg+"\n")
-        #     except Exception as e:
-        #         log.append("Error writing to file:")
-        #         log.append(e)
-        #     finally:
-        #         file.close()
-    #TODO
-    def import_rules(self):
-        files = [('Excel', '*.xlsx'),]
-        file = filedialog.askopenfilename(filetypes=files)
-        #TODO: convert xlsx to gridif file:
-        # this is going to be useful when importing xlsx
-        # data = [
-        #     ["John", 1, "Pepperoni"],
-        #     ["Mary", 2, "Cheese"],
-        #     ["Tim", 3, "Mushroom"],
-        #     ["Erin", 4, "Ham"],
-        #     ["Bob", 5, "Onion"],
-        #     ["Steve", 6, "Peppers"],
-        #     ["Tina", 7, "Cheese"],
-        #     ["Mark", 8, "Supreme"],
-        #     ["John", 1, "Pepperoni"],
-        #     ["Mary", 2, "Cheese"],
-        #     ["Tim", 3, "Mushroom"],
-        #     ["Erin", 4, "Ham"],
-        #     ["Bob", 5, "Onion"],
-        #     ["Steve", 6, "Peppers"],
-        #     ["Tina", 7, "Cheese"],
-        #     ["Mark", 8, "Supreme"],
-        #     ["John", 1, "Pepperoni"],
-        #     ["Mary", 2, "Cheese"],
-        #     ["Tim", 3, "Mushroom"],
-        #     ["Erin", 4, "Ham"],
-        #     ["Bob", 5, "Onion"],
-        #     ["Steve", 6, "Peppers"],
-        #     ["Tina", 7, "Cheese"],
-        #     ["Mark", 8, "Supreme"],
-        #     ["Ruth", 9, "Vegan"]
-        # ]
-
-        # self.rulesTable.tag_configure('white', background="white")
-
-        # 
-        # global ruleCount
-
-        # for record in data:
-        #     self.rulesTable.insert(parent='', index='end', iid=ruleCount, text="", values=(record[0], record[1], record[2]), tags=('white'))
-        #     ruleCount += 1
             
 class Table(ttk.Frame):
     def __init__(self, parent):
         super().__init__(parent)
 
+        # Creating the Import/Export ruleset button in a separate frame
+        self.rulesetFrame = ttk.Frame(self)
+        self.rulesetFrame.grid(row=0, column=0)
+
+        self.exportRules = ttk.Button(self.rulesetFrame, text="Export ruleset", command=self.export_rules)
+        self.exportRules.grid(row=0, column=0, pady=15, padx=(0,130))
+
+        self.importRules = ttk.Button(self.rulesetFrame, text="Import ruleset", command=self.import_rules)
+        self.importRules.grid(row=0, column=1, pady=15, padx=(130,0))
+
+
         # Creating the table
         self.rulesTable = ttk.Treeview(self, selectmode="extended", columns=("In this file type", "if the following text appears", "put the file in this folder"), show="headings")
-        self.rulesTable.grid(row=0, column=0, sticky="nesw")
+        self.rulesTable.grid(row=1, column=0, sticky="nesw")
 
         self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.rulesTable.yview)
-        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        self.scrollbar.grid(row=1, column=1, sticky="ns")
         self.rulesTable.configure(yscrollcommand=self.scrollbar.set)
 
         self.rulesTable.column("#0", width=0, stretch=False)
@@ -455,7 +508,7 @@ class Table(ttk.Frame):
 
         # Creating the inputs section in separate Frame
         self.inputFrame = ttk.Frame(self)
-        self.inputFrame.grid(row=1, column=0)
+        self.inputFrame.grid(row=2, column=0)
 
         self.extensionLabel = ttk.Label(self.inputFrame, text="File type")
         self.extensionLabel.grid(row=0, column=0, pady=(15,5), padx=5)
@@ -473,7 +526,8 @@ class Table(ttk.Frame):
         self.desiredDirectoryLabel.grid(row=0, column=4, columnspan=2, pady=(15,5), padx=5)
 
         self.extensionString = tk.StringVar(self)
-        options = ["All", "All", ".docx", ".pdf"]
+        global supportedExtensions
+        options = ["All", "All"] + supportedExtensions
         self.extensionDropdown = ttk.OptionMenu(self.inputFrame, self.extensionString, *options)
         self.extensionDropdown.grid(row=1, column=0, padx=(0,5))
 
@@ -489,7 +543,7 @@ class Table(ttk.Frame):
 
         # Creating the button section in separate Frame
         self.buttonFrame = ttk.Frame(self)
-        self.buttonFrame.grid(row=2, column=0)
+        self.buttonFrame.grid(row=3, column=0)
 
         self.updateButton = ttk.Button(self.buttonFrame, text="Update selected rule", command=self.update)
         self.updateButton.grid(row=0, column=0, pady=10, padx=0)
@@ -497,7 +551,7 @@ class Table(ttk.Frame):
         self.addNewButton = ttk.Button(self.buttonFrame, text="➕ Add rule", command=self.add)
         self.addNewButton.grid(row=0, column=1, pady=10, padx=0)
 
-        self.removeSelectedButton = ttk.Button(self.buttonFrame, text="Remove selected rules", command=self.remove_selected)
+        self.removeSelectedButton = ttk.Button(self.buttonFrame, text="Remove selected rule(s)", command=self.remove_selected)
         self.removeSelectedButton.grid(row=0, column=3, pady=10, padx=(90,0))
 
 
@@ -626,6 +680,115 @@ class Table(ttk.Frame):
                 self.extensionString.set("All")
                 self.keywordInput.delete(0, tk.END)
                 self.desiredDirectoryInput.delete(0, tk.END)
+    
+    def export_rules(self):
+        files = [('Excel', '*.xlsx')]
+        file = filedialog.asksaveasfile(filetypes=files, defaultextension=files)
+        if file:
+            try:
+                global rules
+                data = {'In this file type': [], 'if the following text appears': [], 'put the file in this folder': []}
+                # rules is structured as such: {All: [[word1,dir1,id1], [word2,dir2, id2]], .pdf: [[word3,dir3,id3], [word4,dir4,id4]]}
+                for filetype in rules:
+                    for rule in rules[filetype]:
+                        currTypeArr = data['In this file type']
+                        currTextArr = data['if the following text appears']
+                        currDirArr = data['put the file in this folder']
+
+                        currTypeArr.append(filetype)
+                        currTextArr.append(rule[0])
+                        currDirArr.append(rule[1])
+
+                        data['In this file type'] = currTypeArr
+                        data['if the following text appears'] = currTextArr
+                        data['put the file in this folder'] = currDirArr
+                
+                df = pd.DataFrame(data)
+                df.to_excel(file.name, index=False)
+                
+                log.append("INFO:\t Successfully exported following ruleset to "+file.name+":\n"+str(data))
+            except PermissionError:
+                log.append("Could not export your ruleset due to a file permissions error. Please make sure the destination file is closed, or chose another file.")
+                messagebox.showerror("Permissions Error when exporting ruleset","Could not export your ruleset due to a file permissions error. Please make sure the destination file is closed, or chose another file.")
+            except Exception as e:
+                log.append("Error exporting rules to file:")
+                log.append(e)
+                messagebox.showerror("Error when exporting ruleset","Could not export your ruleset:\n"+e)
+            finally:
+                file.close()
+
+    def import_rules(self):
+        files = [('Excel', '*.xlsx'),]
+        file = filedialog.askopenfilename(filetypes=files)
+        if file:
+            try:
+                global rules
+                global ruleCount
+                global ruleID
+                global supportedExtensions
+                errors = []
+                df = pd.read_excel(file, keep_default_na=False)
+
+                for index, row in df.iterrows():
+                    self.rulesTable.tag_configure('white', background="white")
+                    currType = str(row['In this file type'])
+                    currText = str(row['if the following text appears'])
+                    currDir = str(row['put the file in this folder'])
+                    currError = [str(index+2), ""]
+
+                    # does error checking before adding
+                    if (not currType or currType.lower() == 'all'):
+                        currType = "All"
+                    elif (currType not in supportedExtensions):
+                        currError[1] = "File type not supported"
+                    if (not currText):
+                        if (currError[1]):
+                            err = currError[1]
+                            err += ", keyword cannot be empty"
+                            currError[1] = err
+                        else:
+                            currError[1] = "Keyword cannot be empty"
+                    if (not currDir):
+                        if (currError[1]):
+                            err = currError[1]
+                            err += ", destination folder cannot be empty"
+                            currError[1] = err
+                        else:
+                            currError[1] = "Destination folder cannot be empty"
+                    elif (not os.path.isdir(currDir)):
+                        if (currError[1]):
+                            err = currError[1]
+                            err += ", destination folder must exist"
+                            currError[1] = err
+                        else:
+                            currError[1] = "Destination folder must exist"
+                    
+                    if (len(currError[1]) == 0):
+                        # adds to dictionary
+                        if (currType not in rules):
+                            rules[currType] = [[currText, currDir, ruleID]]
+                        else:
+                            temp = rules.get(currType)
+                            temp.append([currText, currDir, ruleID])
+                            rules[currType] = temp
+                        
+                        self.rulesTable.insert(parent='', index='end', iid=ruleCount, text=ruleID, values=(currType, currText, currDir), tags=('white'))
+
+                        ruleCount += 1
+                        ruleID += 1
+                    else:
+                        errors.append(currError)
+                if (len(errors) > 0):
+                    errorMsg = "Some rows from your excel could not be added:\n"
+                    for err in errors:
+                        errorMsg += ("Row "+err[0]+": "+err[1])
+                    messagebox.showwarning("Incompatible rules found",errorMsg)
+            except KeyError:
+                messagebox.showerror("Error importing ruleset","""Please format the first row of your ruleset to have the following cells as headers:\n 
+                                     A1: In this file type\n
+                                     B2: if the following text appears\n
+                                     C3: put the file in this folder\n
+                                     """)
 ######################### End of Options tab logic #########################
         
 app = Application()
