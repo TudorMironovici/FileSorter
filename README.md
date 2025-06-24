@@ -88,3 +88,15 @@ Whenever you Update or Add a rule, the app also does some error-checking to make
 - And it checks that the destination folder exists on your system
 
 If any of the errors occur, the app will have a pop-up window explaining the issue.
+
+## Sorting logic
+
+To avoid confusion on which rules get applied when, below is an in-depth explanation of what's going on. But simply, it's first-come-first-serve
+
+1. The app loops through each folder add on the "Sort folders" tab, starting with all the files in the first folder of the list and ending with all the files in the last folder of the list.
+2. For every file, if the file's type is supported, the app checks it against the rule sub-set of all rules under the file's type.\
+For example: if the app reads in a .txt and you set rules for .txt files on rows 3, 4, 7 and 11 of the rules table, the app checks if there is a text match of the rule on row 3 first, then row 4, then row 7, and finally row 11.\
+Whenever the app finds a match, it does not continue looking further in the ruleset and moved the file immidiately.
+3. If there is no match against the rule sub-set under the file's type, it will check the file against the rule sub-set for file type "All".\
+It will follow the same order and process as for the rule sub-set of all rules under the file's type.
+4. If there is no match against the "All" rule sub-set either, it will go to the default sorting method of moving the file into a sub-folder of its file type.
